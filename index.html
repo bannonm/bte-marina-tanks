@@ -449,26 +449,50 @@
   });
 
   // ---- CSV import: parse FloDash export, sum flow since last calibration ----
+
+  // Robustly convert a FloDash timestamp string ("2026-07-14 09:15:00" or
+  // "2026-07-14T09:15:00") into a real Date, treating it as local time.
+  // We do NOT rely on new Date(rawString) directly — space-separated
+  // datetimes are non-standard and different browsers parse them
+  // inconsistently (this was the root cause of the "net +0" bug).
+  function parseLocalTimestamp(raw) {
+    const s = raw.trim().replace(/^"|"$/g, '');
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+    if (!m) return null;
+    const [, y, mo, d, h, mi, se] = m.map(Number);
+    // Construct explicitly as local time components — guarantees the same
+    // interpretation every browser, every time, no ambiguity.
+    return new Date(y, mo - 1, d, h, mi, se);
+  }
+
+  // Find the real header row by content instead of assuming a fixed line
+  // number — FloDash's comment-line count isn't guaranteed to be exactly 3
+  // in every export, so scanning for the row that actually names the
+  // columns we need is more robust.
   function parseFloDashCSV(text) {
-    // FloDash exports have 3 comment/header lines before the real header row.
     const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-    const headerLine = lines[3];
-    const headers = headerLine.split(',').map(h => h.trim());
+    let headerIdx = lines.findIndex(l => l.toLowerCase().includes('flow_amount_gallon'));
+    if (headerIdx === -1) {
+      throw new Error("Couldn't find the 'flow_amount_gallon' column — is this a FloDash export?");
+    }
+    const headers = lines[headerIdx].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
     const tsIdx = headers.findIndex(h => h.toLowerCase().startsWith('recorded_at_local'));
     const amtIdx = headers.findIndex(h => h.toLowerCase() === 'flow_amount_gallon');
     if (tsIdx === -1 || amtIdx === -1) {
-      throw new Error("Unrecognized CSV format (couldn't find timestamp/amount columns).");
+      throw new Error("Found the header row but couldn't match both timestamp and amount columns.");
     }
+
     const rows = [];
-    for (let i = 4; i < lines.length; i++) {
+    let skippedRows = 0;
+    for (let i = headerIdx + 1; i < lines.length; i++) {
       const cols = lines[i].split(',');
-      if (cols.length <= Math.max(tsIdx, amtIdx)) continue;
-      const ts = cols[tsIdx].trim();
+      if (cols.length <= Math.max(tsIdx, amtIdx)) { skippedRows++; continue; }
+      const ts = parseLocalTimestamp(cols[tsIdx]);
       const amt = parseFloat(cols[amtIdx]);
-      if (!ts || isNaN(amt)) continue;
-      rows.push({ ts: new Date(ts), amount: amt });
+      if (!ts || isNaN(amt)) { skippedRows++; continue; }
+      rows.push({ ts, amount: amt });
     }
-    return rows;
+    return { rows, skippedRows };
   }
 
   function readFileAsText(file) {
@@ -480,8 +504,23 @@
     });
   }
 
-  function sumSince(rows, sinceDate) {
-    return rows.filter(r => r.ts > sinceDate).reduce((sum, r) => sum + r.amount, 0);
+  // Returns full diagnostics, not just a number — so a bad match is
+  // visible immediately instead of silently reporting a false zero.
+  function summarize(rows, sinceDate) {
+    if (rows.length === 0) {
+      return { total: 0, matched: 0, matchedSum: 0, min: null, max: null };
+    }
+    const min = rows.reduce((a, r) => r.ts < a ? r.ts : a, rows[0].ts);
+    const max = rows.reduce((a, r) => r.ts > a ? r.ts : a, rows[0].ts);
+    const matchedRows = rows.filter(r => r.ts > sinceDate);
+    const matchedSum = matchedRows.reduce((sum, r) => sum + r.amount, 0);
+    return { total: rows.length, matched: matchedRows.length, matchedSum, min, max };
+  }
+
+  function fmtDT(d) {
+    if (!d) return '—';
+    return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' +
+           d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
   }
 
   document.getElementById('btn-import-csv').addEventListener('click', async () => {
@@ -500,7 +539,7 @@
     btn.disabled = true;
     btn.textContent = "Calculating...";
     statusEl.style.color = "var(--text-dim)";
-    statusEl.textContent = "Reading files...";
+    statusEl.innerHTML = "Reading files...";
 
     try {
       // Get last calibration as the starting point
@@ -520,23 +559,41 @@
         readFileAsText(outflowFile), readFileAsText(inflow1File), readFileAsText(inflow2File)
       ]);
 
-      const outRows = parseFloDashCSV(outText);
-      const in1Rows = parseFloDashCSV(in1Text);
-      const in2Rows = parseFloDashCSV(in2Text);
+      const outParsed = parseFloDashCSV(outText);
+      const in1Parsed = parseFloDashCSV(in1Text);
+      const in2Parsed = parseFloDashCSV(in2Text);
 
-      const outTotal = sumSince(outRows, sinceDate);
-      const in1Total = sumSince(in1Rows, sinceDate);
-      const in2Total = sumSince(in2Rows, sinceDate);
+      const outSum = summarize(outParsed.rows, sinceDate);
+      const in1Sum = summarize(in1Parsed.rows, sinceDate);
+      const in2Sum = summarize(in2Parsed.rows, sinceDate);
 
-      const delta = (in1Total + in2Total) - outTotal;
+      // Diagnostic breakdown — always shown, so a bad match is visible
+      // immediately rather than hiding inside a suspiciously-round total.
+      const diag = `
+        <div style="text-align:left;margin-top:10px;font-size:12px;line-height:1.6;">
+          <b style="color:var(--foam);">Last calibration:</b> ${fmtDT(sinceDate)} (${Math.round(lastCal.gallons).toLocaleString()} gal)<br><br>
+          <b style="color:var(--foam);">Outflow:</b> ${outSum.total} rows, ${fmtDT(outSum.min)} – ${fmtDT(outSum.max)}, ${outSum.matched} after cutoff, ${outSum.matchedSum.toFixed(1)} gal<br>
+          <b style="color:var(--foam);">Inflow 1:</b> ${in1Sum.total} rows, ${fmtDT(in1Sum.min)} – ${fmtDT(in1Sum.max)}, ${in1Sum.matched} after cutoff, ${in1Sum.matchedSum.toFixed(1)} gal<br>
+          <b style="color:var(--foam);">Inflow 2:</b> ${in2Sum.total} rows, ${fmtDT(in2Sum.min)} – ${fmtDT(in2Sum.max)}, ${in2Sum.matched} after cutoff, ${in2Sum.matchedSum.toFixed(1)} gal
+        </div>`;
+
+      const totalMatched = outSum.matched + in1Sum.matched + in2Sum.matched;
+
+      if (totalMatched === 0) {
+        statusEl.style.color = "var(--danger)";
+        statusEl.innerHTML = `No rows in any file fall after your last calibration (${fmtDT(sinceDate)}). Nothing was saved — these files likely predate that reading, or cover the wrong date range.` + diag;
+        return;
+      }
+
+      const delta = (in1Sum.matchedSum + in2Sum.matchedSum) - outSum.matchedSum;
       let newGallons = lastCal.gallons + delta;
       newGallons = Math.max(0, Math.min(TANK_CAPACITY, newGallons));
 
-      const latestTs = [...outRows, ...in1Rows, ...in2Rows].reduce(
-        (max, r) => r.ts > max ? r.ts : max, sinceDate
+      const latestTs = [outSum.max, in1Sum.max, in2Sum.max].reduce(
+        (max, d) => (d && d > max) ? d : max, sinceDate
       );
 
-      const notes = `CSV import: +${in1Total.toFixed(0)} in1, +${in2Total.toFixed(0)} in2, -${outTotal.toFixed(0)} out (since ${formatWhen(sinceDate.toISOString())})`;
+      const notes = `CSV import: +${in1Sum.matchedSum.toFixed(0)} in1, +${in2Sum.matchedSum.toFixed(0)} in2, -${outSum.matchedSum.toFixed(0)} out (since ${fmtDT(sinceDate)})`;
 
       const { error: insertErr } = await sb.from('calibration_events').insert({
         measured_at: latestTs.toISOString(),
@@ -547,7 +604,7 @@
       if (insertErr) throw insertErr;
 
       statusEl.style.color = "var(--ok)";
-      statusEl.textContent = `Updated: ${Math.round(newGallons).toLocaleString()} gal (net ${delta >= 0 ? '+' : ''}${delta.toFixed(0)} gal since last calibration).`;
+      statusEl.innerHTML = `Updated: ${Math.round(newGallons).toLocaleString()} gal (net ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} gal).` + diag;
       loadDashboard();
 
     } catch (err) {
