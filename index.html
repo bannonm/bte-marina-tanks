@@ -251,6 +251,31 @@
       <div class="helper" id="save-status"></div>
     </div>
 
+    <h2 class="section-title">Import Bluebot CSV</h2>
+    <div class="card">
+      <p class="helper" style="margin-top:0;">
+        Upload the 3 exports from FloDash (Outflow, Inflow 1, Inflow 2). The app adds up
+        every reading after your last calibration and updates the reserve from there.
+        Files are matched automatically by meter serial number in the filename.
+      </p>
+
+      <div class="field">
+        <label>Outflow file (BB8100018220...)</label>
+        <input type="file" id="csv-outflow" accept=".csv">
+      </div>
+      <div class="field">
+        <label>Inflow 1 file (BB8100016757...)</label>
+        <input type="file" id="csv-inflow1" accept=".csv">
+      </div>
+      <div class="field">
+        <label>Inflow 2 file (BB8100017081...)</label>
+        <input type="file" id="csv-inflow2" accept=".csv">
+      </div>
+
+      <button class="btn-primary" id="btn-import-csv">Calculate &amp; Update Reserve</button>
+      <div class="helper" id="csv-status"></div>
+    </div>
+
     <h2 class="section-title">Auto Calibration (Bluebot)</h2>
     <div class="card">
       <p class="helper" style="margin-top:0;">
@@ -421,6 +446,118 @@
     document.getElementById('input-gallons').value = '';
     document.getElementById('input-notes').value = '';
     loadDashboard();
+  });
+
+  // ---- CSV import: parse FloDash export, sum flow since last calibration ----
+  function parseFloDashCSV(text) {
+    // FloDash exports have 3 comment/header lines before the real header row.
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+    const headerLine = lines[3];
+    const headers = headerLine.split(',').map(h => h.trim());
+    const tsIdx = headers.findIndex(h => h.toLowerCase().startsWith('recorded_at_local'));
+    const amtIdx = headers.findIndex(h => h.toLowerCase() === 'flow_amount_gallon');
+    if (tsIdx === -1 || amtIdx === -1) {
+      throw new Error("Unrecognized CSV format (couldn't find timestamp/amount columns).");
+    }
+    const rows = [];
+    for (let i = 4; i < lines.length; i++) {
+      const cols = lines[i].split(',');
+      if (cols.length <= Math.max(tsIdx, amtIdx)) continue;
+      const ts = cols[tsIdx].trim();
+      const amt = parseFloat(cols[amtIdx]);
+      if (!ts || isNaN(amt)) continue;
+      rows.push({ ts: new Date(ts), amount: amt });
+    }
+    return rows;
+  }
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsText(file);
+    });
+  }
+
+  function sumSince(rows, sinceDate) {
+    return rows.filter(r => r.ts > sinceDate).reduce((sum, r) => sum + r.amount, 0);
+  }
+
+  document.getElementById('btn-import-csv').addEventListener('click', async () => {
+    const statusEl = document.getElementById('csv-status');
+    const outflowFile = document.getElementById('csv-outflow').files[0];
+    const inflow1File = document.getElementById('csv-inflow1').files[0];
+    const inflow2File = document.getElementById('csv-inflow2').files[0];
+
+    if (!outflowFile || !inflow1File || !inflow2File) {
+      statusEl.textContent = "Please choose all 3 files.";
+      statusEl.style.color = "var(--danger)";
+      return;
+    }
+
+    const btn = document.getElementById('btn-import-csv');
+    btn.disabled = true;
+    btn.textContent = "Calculating...";
+    statusEl.style.color = "var(--text-dim)";
+    statusEl.textContent = "Reading files...";
+
+    try {
+      // Get last calibration as the starting point
+      const { data: lastCalRows, error: lastCalErr } = await sb
+        .from('calibration_events')
+        .select('*')
+        .order('measured_at', { ascending: false })
+        .limit(1);
+      if (lastCalErr) throw lastCalErr;
+      if (!lastCalRows || lastCalRows.length === 0) {
+        throw new Error("No calibration exists yet. Log a manual reading first.");
+      }
+      const lastCal = lastCalRows[0];
+      const sinceDate = new Date(lastCal.measured_at);
+
+      const [outText, in1Text, in2Text] = await Promise.all([
+        readFileAsText(outflowFile), readFileAsText(inflow1File), readFileAsText(inflow2File)
+      ]);
+
+      const outRows = parseFloDashCSV(outText);
+      const in1Rows = parseFloDashCSV(in1Text);
+      const in2Rows = parseFloDashCSV(in2Text);
+
+      const outTotal = sumSince(outRows, sinceDate);
+      const in1Total = sumSince(in1Rows, sinceDate);
+      const in2Total = sumSince(in2Rows, sinceDate);
+
+      const delta = (in1Total + in2Total) - outTotal;
+      let newGallons = lastCal.gallons + delta;
+      newGallons = Math.max(0, Math.min(TANK_CAPACITY, newGallons));
+
+      const latestTs = [...outRows, ...in1Rows, ...in2Rows].reduce(
+        (max, r) => r.ts > max ? r.ts : max, sinceDate
+      );
+
+      const notes = `CSV import: +${in1Total.toFixed(0)} in1, +${in2Total.toFixed(0)} in2, -${outTotal.toFixed(0)} out (since ${formatWhen(sinceDate.toISOString())})`;
+
+      const { error: insertErr } = await sb.from('calibration_events').insert({
+        measured_at: latestTs.toISOString(),
+        gallons: newGallons,
+        source: 'csv_import',
+        notes: notes
+      });
+      if (insertErr) throw insertErr;
+
+      statusEl.style.color = "var(--ok)";
+      statusEl.textContent = `Updated: ${Math.round(newGallons).toLocaleString()} gal (net ${delta >= 0 ? '+' : ''}${delta.toFixed(0)} gal since last calibration).`;
+      loadDashboard();
+
+    } catch (err) {
+      console.error(err);
+      statusEl.style.color = "var(--danger)";
+      statusEl.textContent = "Error: " + err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Calculate & Update Reserve";
+    }
   });
 
   // ---- Pending dual-zero banner (placeholder logic for now) ----
