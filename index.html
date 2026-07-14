@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Big Tank Energy</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/bte-icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0B1E3A">
+<style>
+  :root{
+    --navy:#0B1E3A;
+    --navy-deep:#071429;
+    --water:#2F8FE0;
+    --water-light:#6BB6F0;
+    --foam:#EAF4FC;
+    --gold:#E8B23C;
+    --danger:#E0524A;
+    --ok:#3FBF8F;
+    --warn:#E0A83F;
+    --text-dim:#8CA0BE;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  body{
+    margin:0;
+    background:var(--navy-deep);
+    color:var(--foam);
+    min-height:100vh;
+    padding-bottom:90px;
+  }
+  header{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:18px 20px 10px;
+  }
+  header img{width:44px;height:44px;border-radius:12px;}
+  header .brand{display:flex;flex-direction:column;}
+  header .brand .name{font-size:20px;font-weight:800;letter-spacing:0.3px;}
+  header .brand .tag{font-size:12px;color:var(--water-light);font-weight:700;}
+  main{padding:8px 20px 20px;max-width:520px;margin:0 auto;}
+
+  .card{
+    background:linear-gradient(180deg,#0F2647,#0B1E3A);
+    border:1px solid rgba(255,255,255,0.06);
+    border-radius:20px;
+    padding:20px;
+    margin-bottom:16px;
+  }
+
+  /* Gauge */
+  .gauge-wrap{display:flex;flex-direction:column;align-items:center;padding:10px 0 4px;}
+  .gauge{position:relative;width:200px;height:200px;}
+  .gauge svg{transform:rotate(-90deg);}
+  .gauge-label{
+    position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    text-align:center;
+  }
+  .gauge-label .pct{font-size:38px;font-weight:800;}
+  .gauge-label .gal{font-size:13px;color:var(--text-dim);margin-top:2px;}
+  .status-pill{
+    margin-top:14px;
+    font-size:13px;
+    font-weight:700;
+    padding:6px 14px;
+    border-radius:999px;
+    background:rgba(63,191,143,0.15);
+    color:var(--ok);
+  }
+  .status-pill.warn{background:rgba(224,168,63,0.15);color:var(--warn);}
+  .status-pill.danger{background:rgba(224,82,74,0.15);color:var(--danger);}
+  .status-pill.pending{background:rgba(140,160,190,0.15);color:var(--text-dim);}
+
+  .meta-row{
+    display:flex;justify-content:space-between;
+    font-size:12.5px;color:var(--text-dim);
+    padding-top:16px;margin-top:16px;
+    border-top:1px solid rgba(255,255,255,0.07);
+  }
+  .meta-row b{color:var(--foam);font-weight:600;}
+
+  h2.section-title{
+    font-size:14px;
+    text-transform:uppercase;
+    letter-spacing:0.08em;
+    color:var(--text-dim);
+    margin:22px 4px 10px;
+  }
+
+  /* Dual zero pending banner */
+  .alert-card{
+    background:linear-gradient(180deg,#2A2308,#211C08);
+    border:1px solid rgba(232,178,60,0.3);
+  }
+  .alert-card .title{font-weight:800;font-size:15px;color:var(--gold);margin-bottom:4px;}
+  .alert-card p{font-size:13px;color:#D8C79A;margin:0 0 14px;line-height:1.4;}
+  .btn-row{display:flex;gap:10px;}
+  .btn{
+    flex:1;
+    padding:12px;
+    border-radius:12px;
+    border:none;
+    font-weight:700;
+    font-size:14px;
+    cursor:pointer;
+  }
+  .btn-confirm{background:var(--ok);color:#06231A;}
+  .btn-reject{background:rgba(255,255,255,0.08);color:var(--foam);}
+
+  /* Manual calibration */
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:12.5px;color:var(--text-dim);margin-bottom:6px;font-weight:600;}
+  .field input{
+    width:100%;
+    background:var(--navy-deep);
+    border:1px solid rgba(255,255,255,0.12);
+    border-radius:10px;
+    padding:12px 14px;
+    font-size:16px;
+    color:var(--foam);
+  }
+  .field input:focus{outline:none;border-color:var(--water);}
+  .btn-primary{
+    width:100%;
+    background:var(--water);
+    color:#04162E;
+    padding:14px;
+    border:none;
+    border-radius:12px;
+    font-weight:800;
+    font-size:15px;
+    cursor:pointer;
+  }
+  .btn-primary:disabled{opacity:0.5;}
+  .helper{font-size:12px;color:var(--text-dim);margin-top:8px;line-height:1.4;}
+
+  /* History */
+  .history-item{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:12px 0;
+    border-bottom:1px solid rgba(255,255,255,0.06);
+  }
+  .history-item:last-child{border-bottom:none;}
+  .history-item .left .gal{font-weight:700;font-size:15px;}
+  .history-item .left .when{font-size:12px;color:var(--text-dim);margin-top:2px;}
+  .tag{
+    font-size:11px;font-weight:700;padding:4px 9px;border-radius:999px;
+  }
+  .tag.manual{background:rgba(47,143,224,0.15);color:var(--water-light);}
+  .tag.api{background:rgba(63,191,143,0.15);color:var(--ok);}
+  .empty-state{font-size:13px;color:var(--text-dim);text-align:center;padding:20px 0;}
+
+  /* Tab bar */
+  nav.tabbar{
+    position:fixed;bottom:0;left:0;right:0;
+    background:rgba(11,30,58,0.95);
+    backdrop-filter:blur(10px);
+    border-top:1px solid rgba(255,255,255,0.08);
+    display:flex;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  nav.tabbar button{
+    flex:1;background:none;border:none;color:var(--text-dim);
+    padding:12px 0 8px;font-size:11px;font-weight:600;
+    display:flex;flex-direction:column;align-items:center;gap:4px;
+  }
+  nav.tabbar button.active{color:var(--water-light);}
+  nav.tabbar svg{width:22px;height:22px;}
+
+  .screen{display:none;}
+  .screen.active{display:block;}
+</style>
+</head>
+<body>
+
+<header>
+  <img src="icons/bte-icon-180.png" alt="BTE">
+  <div class="brand">
+    <div class="name">Big Tank Energy</div>
+    <div class="tag">NOT EMPTY. YET.</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ===================== DASHBOARD ===================== -->
+  <section id="screen-dashboard" class="screen active">
+
+    <div id="pending-banner"></div>
+
+    <div class="card">
+      <div class="gauge-wrap">
+        <div class="gauge">
+          <svg width="200" height="200" viewBox="0 0 200 200">
+            <circle cx="100" cy="100" r="86" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="16"/>
+            <circle id="gauge-arc" cx="100" cy="100" r="86" fill="none" stroke="#2F8FE0" stroke-width="16"
+                    stroke-linecap="round" stroke-dasharray="540" stroke-dashoffset="540"/>
+          </svg>
+          <div class="gauge-label">
+            <div class="pct" id="pct-display">--%</div>
+            <div class="gal" id="gal-display">calibrating...</div>
+          </div>
+        </div>
+        <div class="status-pill pending" id="status-pill">Awaiting calibration</div>
+      </div>
+
+      <div class="meta-row">
+        <span>Last calibration</span>
+        <b id="last-cal-when">—</b>
+      </div>
+      <div class="meta-row">
+        <span>Source</span>
+        <b id="last-cal-source">—</b>
+      </div>
+    </div>
+
+    <h2 class="section-title">Recent Calibrations</h2>
+    <div class="card" id="history-list">
+      <div class="empty-state">No calibrations logged yet.</div>
+    </div>
+  </section>
+
+  <!-- ===================== MANUAL CALIBRATION ===================== -->
+  <section id="screen-calibrate" class="screen">
+    <h2 class="section-title">Manual Reading</h2>
+    <div class="card">
+      <p class="helper" style="margin-top:0;">
+        Log a physical dip-stick or visual reading. This immediately becomes
+        the new baseline — no confirmation needed since you checked it yourself.
+      </p>
+
+      <div class="field">
+        <label>Measured reserve (gallons, 0–6000)</label>
+        <input type="number" id="input-gallons" placeholder="e.g. 4263" min="0" max="6000">
+      </div>
+
+      <div class="field">
+        <label>Date &amp; time measured</label>
+        <input type="datetime-local" id="input-datetime">
+      </div>
+
+      <div class="field">
+        <label>Notes (optional)</label>
+        <input type="text" id="input-notes" placeholder="e.g. dip stick, all 3 tanks level">
+      </div>
+
+      <button class="btn-primary" id="btn-save-manual">Save Reading</button>
+      <div class="helper" id="save-status"></div>
+    </div>
+
+    <h2 class="section-title">Auto Calibration (Bluebot)</h2>
+    <div class="card">
+      <p class="helper" style="margin-top:0;">
+        Once live meter polling is connected, the app will watch for both
+        inflow meters hitting 0 gpm at the same time and ask you to confirm
+        whether that means the tanks are full.
+      </p>
+      <div class="status-pill pending">Not yet connected</div>
+    </div>
+  </section>
+
+</main>
+
+<nav class="tabbar">
+  <button class="tab-btn active" data-screen="screen-dashboard">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+    Dashboard
+  </button>
+  <button class="tab-btn" data-screen="screen-calibrate">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v16m8-8H4"/></svg>
+    Calibrate
+  </button>
+</nav>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+  // ---- Supabase setup ----
+  const SUPABASE_URL = "https://cxokbppmtomjltokectx.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN4b2ticHBtdG9tamx0b2tlY3R4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNDQyMTIsImV4cCI6MjA5OTYyMDIxMn0.gxpf_WQRueYKlvmQ5Gy9C9_KxoyXDXQCHMFi4_B8ySU";
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const TANK_CAPACITY = 6000;
+
+  // ---- Tab navigation ----
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.screen).classList.add('active');
+    });
+  });
+
+  // ---- Gauge rendering ----
+  function renderGauge(gallons) {
+    const pct = Math.max(0, Math.min(100, (gallons / TANK_CAPACITY) * 100));
+    const circumference = 2 * Math.PI * 86; // ~540
+    const arc = document.getElementById('gauge-arc');
+    const offset = circumference - (pct / 100) * circumference;
+    arc.style.strokeDasharray = circumference;
+    arc.style.strokeDashoffset = offset;
+
+    let color = "#2F8FE0"; // normal
+    let pillClass = "ok";
+    let pillText = "Looking good";
+    if (pct <= 15) { color = "#E0524A"; pillClass = "danger"; pillText = "Critically low"; }
+    else if (pct <= 35) { color = "#E0A83F"; pillClass = "warn"; pillText = "Running low"; }
+
+    arc.setAttribute('stroke', color);
+    document.getElementById('pct-display').textContent = pct.toFixed(1) + "%";
+    document.getElementById('gal-display').textContent = Math.round(gallons).toLocaleString() + " / " + TANK_CAPACITY.toLocaleString() + " gal";
+
+    const pill = document.getElementById('status-pill');
+    pill.className = "status-pill " + pillClass;
+    pill.textContent = pillText;
+  }
+
+  function renderCalibrating() {
+    document.getElementById('pct-display').textContent = "--%";
+    document.getElementById('gal-display').textContent = "awaiting first calibration";
+    const pill = document.getElementById('status-pill');
+    pill.className = "status-pill pending";
+    pill.textContent = "Awaiting calibration";
+  }
+
+  function formatWhen(iso) {
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' \u2022 ' +
+           d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+  }
+
+  // ---- Load latest calibration + history ----
+  async function loadDashboard() {
+    const { data, error } = await sb
+      .from('calibration_events')
+      .select('*')
+      .order('measured_at', { ascending: false })
+      .limit(10);
+
+    if (error) {
+      console.error(error);
+      document.getElementById('save-status').textContent = "Error loading data: " + error.message;
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      renderCalibrating();
+      document.getElementById('last-cal-when').textContent = "—";
+      document.getElementById('last-cal-source').textContent = "—";
+      return;
+    }
+
+    const latest = data[0];
+    renderGauge(latest.gallons);
+    document.getElementById('last-cal-when').textContent = formatWhen(latest.measured_at);
+    document.getElementById('last-cal-source').textContent = latest.source === 'manual' ? 'Manual dip-stick' : 'Bluebot dual-zero';
+
+    const list = document.getElementById('history-list');
+    list.innerHTML = '';
+    data.forEach(row => {
+      const pct = ((row.gallons / TANK_CAPACITY) * 100).toFixed(1);
+      const div = document.createElement('div');
+      div.className = 'history-item';
+      div.innerHTML = `
+        <div class="left">
+          <div class="gal">${Math.round(row.gallons).toLocaleString()} gal (${pct}%)</div>
+          <div class="when">${formatWhen(row.measured_at)}${row.notes ? ' \u2014 ' + row.notes : ''}</div>
+        </div>
+        <div class="tag ${row.source === 'manual' ? 'manual' : 'api'}">${row.source === 'manual' ? 'Manual' : 'Bluebot'}</div>
+      `;
+      list.appendChild(div);
+    });
+  }
+
+  // ---- Save manual reading ----
+  document.getElementById('input-datetime').value = new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
+
+  document.getElementById('btn-save-manual').addEventListener('click', async () => {
+    const gallons = parseFloat(document.getElementById('input-gallons').value);
+    const datetimeLocal = document.getElementById('input-datetime').value;
+    const notes = document.getElementById('input-notes').value.trim();
+    const statusEl = document.getElementById('save-status');
+
+    if (isNaN(gallons) || gallons < 0 || gallons > TANK_CAPACITY) {
+      statusEl.textContent = "Enter a gallon amount between 0 and " + TANK_CAPACITY + ".";
+      statusEl.style.color = "var(--danger)";
+      return;
+    }
+    if (!datetimeLocal) {
+      statusEl.textContent = "Pick a date and time.";
+      statusEl.style.color = "var(--danger)";
+      return;
+    }
+
+    const btn = document.getElementById('btn-save-manual');
+    btn.disabled = true;
+    btn.textContent = "Saving...";
+
+    const { error } = await sb.from('calibration_events').insert({
+      measured_at: new Date(datetimeLocal).toISOString(),
+      gallons: gallons,
+      source: 'manual',
+      notes: notes || null
+    });
+
+    btn.disabled = false;
+    btn.textContent = "Save Reading";
+
+    if (error) {
+      statusEl.textContent = "Error: " + error.message;
+      statusEl.style.color = "var(--danger)";
+      console.error(error);
+      return;
+    }
+
+    statusEl.textContent = "Saved. Dashboard updated.";
+    statusEl.style.color = "var(--ok)";
+    document.getElementById('input-gallons').value = '';
+    document.getElementById('input-notes').value = '';
+    loadDashboard();
+  });
+
+  // ---- Pending dual-zero banner (placeholder logic for now) ----
+  async function loadPendingDualZero() {
+    const { data } = await sb
+      .from('dual_zero_events')
+      .select('*')
+      .eq('status', 'pending')
+      .order('detected_at', { ascending: false })
+      .limit(1);
+
+    const banner = document.getElementById('pending-banner');
+    if (!data || data.length === 0) { banner.innerHTML = ''; return; }
+
+    const evt = data[0];
+    banner.innerHTML = `
+      <div class="card alert-card">
+        <div class="title">Both inflows hit 0 gpm</div>
+        <p>Detected ${formatWhen(evt.detected_at)}. Is this a tank-full event, or something else (outage, upstream leak)?</p>
+        <div class="btn-row">
+          <button class="btn btn-confirm" onclick="resolveDualZero('${evt.id}', true)">Yes, tanks full</button>
+          <button class="btn btn-reject" onclick="resolveDualZero('${evt.id}', false)">No, ignore</button>
+        </div>
+      </div>
+    `;
+  }
+
+  async function resolveDualZero(id, confirmed) {
+    await sb.from('dual_zero_events').update({
+      status: confirmed ? 'confirmed_full' : 'rejected',
+      resolved_at: new Date().toISOString()
+    }).eq('id', id);
+
+    if (confirmed) {
+      await sb.from('calibration_events').insert({
+        measured_at: new Date().toISOString(),
+        gallons: TANK_CAPACITY,
+        source: 'api_dual_zero'
+      });
+    }
+    loadPendingDualZero();
+    loadDashboard();
+  }
+
+  // ---- Init ----
+  loadDashboard();
+  loadPendingDualZero();
+</script>
+
+</body>
+</html>
