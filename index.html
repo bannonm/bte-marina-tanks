@@ -151,6 +151,7 @@
   }
   .tag.manual{background:rgba(47,143,224,0.15);color:var(--water-light);}
   .tag.api{background:rgba(63,191,143,0.15);color:var(--ok);}
+  .tag.csv{background:rgba(232,178,60,0.15);color:var(--gold);}
   .empty-state{font-size:13px;color:var(--text-dim);text-align:center;padding:20px 0;}
 
   /* Tab bar */
@@ -351,6 +352,18 @@
     pill.textContent = "Awaiting calibration";
   }
 
+  function sourceLabel(source) {
+    if (source === 'manual') return 'Manual dip-stick';
+    if (source === 'csv_import') return 'CSV import';
+    if (source === 'api_dual_zero') return 'Bluebot dual-zero';
+    return source;
+  }
+  function sourceTagClass(source) {
+    if (source === 'manual') return 'manual';
+    if (source === 'csv_import') return 'csv';
+    return 'api';
+  }
+
   function formatWhen(iso) {
     const d = new Date(iso);
     return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' \u2022 ' +
@@ -381,7 +394,7 @@
     const latest = data[0];
     renderGauge(latest.gallons);
     document.getElementById('last-cal-when').textContent = formatWhen(latest.measured_at);
-    document.getElementById('last-cal-source').textContent = latest.source === 'manual' ? 'Manual dip-stick' : 'Bluebot dual-zero';
+    document.getElementById('last-cal-source').textContent = sourceLabel(latest.source);
 
     const list = document.getElementById('history-list');
     list.innerHTML = '';
@@ -394,7 +407,7 @@
           <div class="gal">${Math.round(row.gallons).toLocaleString()} gal (${pct}%)</div>
           <div class="when">${formatWhen(row.measured_at)}${row.notes ? ' \u2014 ' + row.notes : ''}</div>
         </div>
-        <div class="tag ${row.source === 'manual' ? 'manual' : 'api'}">${row.source === 'manual' ? 'Manual' : 'Bluebot'}</div>
+        <div class="tag ${sourceTagClass(row.source)}">${sourceLabel(row.source)}</div>
       `;
       list.appendChild(div);
     });
