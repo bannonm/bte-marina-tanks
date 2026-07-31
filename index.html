@@ -73,6 +73,10 @@
   .status-pill.warn{background:rgba(224,168,63,0.15);color:var(--warn);}
   .status-pill.danger{background:rgba(224,82,74,0.15);color:var(--danger);}
   .status-pill.pending{background:rgba(140,160,190,0.15);color:var(--text-dim);}
+  .live-note{
+    margin-top:10px; font-size:11px; color:var(--water-light);
+    text-align:center; display:none;
+  }
 
   .meta-row{
     display:flex;justify-content:space-between;
@@ -206,6 +210,7 @@
           </div>
         </div>
         <div class="status-pill pending" id="status-pill">Awaiting calibration</div>
+        <div class="live-note" id="live-note"></div>
       </div>
 
       <div class="meta-row">
@@ -350,6 +355,8 @@
     const pill = document.getElementById('status-pill');
     pill.className = "status-pill pending";
     pill.textContent = "Awaiting calibration";
+    const liveNoteEl = document.getElementById('live-note');
+    liveNoteEl.style.display = 'none';
   }
 
   function sourceLabel(source) {
@@ -370,7 +377,50 @@
            d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
   }
 
-  // ---- Load latest calibration + history ----
+  // ---- Live reserve calculation ----
+  // The gauge should reflect: last calibration + everything the Worker has
+  // polled since then. calibration_events are anchor points; flow_readings
+  // is the continuous stream on top of them.
+  // Supabase/Postgrest can return timezone offsets without minutes
+  // (e.g. "+00" instead of "+00:00" or "Z"), which native Date parsing
+  // silently rejects as Invalid Date. Normalize before parsing.
+  function safeParseDate(ts) {
+    let s = ts;
+    if (/[+-]\d{2}$/.test(s)) s += ':00';
+    const d = new Date(s);
+    return isNaN(d) ? null : d;
+  }
+
+  async function fetchLiveReserve(lastCal) {
+    const { data, error } = await sb
+      .from('flow_readings')
+      .select('meter_label,total_flow_amount,window_end')
+      .gt('window_end', lastCal.measured_at)
+      .order('window_end', { ascending: false })
+      .limit(10000);
+
+    if (error || !data) {
+      console.error('flow_readings fetch failed', error);
+      return { gallons: lastCal.gallons, freshAsOf: null, readingCount: 0 };
+    }
+    if (data.length === 0) {
+      return { gallons: lastCal.gallons, freshAsOf: null, readingCount: 0 };
+    }
+
+    let inflow = 0, outflow = 0, latest = null;
+    for (const row of data) {
+      const amt = Number(row.total_flow_amount) || 0;
+      if (row.meter_label === 'outflow') outflow += amt;
+      else inflow += amt; // inflow1 + inflow2
+
+      const t = safeParseDate(row.window_end);
+      if (t && (!latest || t > latest)) latest = t;
+    }
+
+    let gallons = lastCal.gallons + inflow - outflow;
+    gallons = Math.max(0, Math.min(TANK_CAPACITY, gallons));
+    return { gallons, freshAsOf: latest, readingCount: data.length };
+  }
   async function loadDashboard() {
     const { data, error } = await sb
       .from('calibration_events')
@@ -392,9 +442,19 @@
     }
 
     const latest = data[0];
-    renderGauge(latest.gallons);
+    const live = await fetchLiveReserve(latest);
+    renderGauge(live.gallons);
     document.getElementById('last-cal-when').textContent = formatWhen(latest.measured_at);
     document.getElementById('last-cal-source').textContent = sourceLabel(latest.source);
+
+    const liveNoteEl = document.getElementById('live-note');
+    if (live.readingCount > 0 && live.freshAsOf) {
+      liveNoteEl.textContent = `Live — includes ${live.readingCount} meter reading(s), latest at ${formatWhen(live.freshAsOf.toISOString())}`;
+      liveNoteEl.style.display = 'block';
+    } else {
+      liveNoteEl.textContent = '';
+      liveNoteEl.style.display = 'none';
+    }
 
     const list = document.getElementById('history-list');
     list.innerHTML = '';
@@ -675,6 +735,10 @@
   // ---- Init ----
   loadDashboard();
   loadPendingDualZero();
+  setInterval(() => {
+    loadDashboard();
+    loadPendingDualZero();
+  }, 60000);
 </script>
 
 </body>
