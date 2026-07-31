@@ -882,9 +882,35 @@
     return { series: trimmed, markers: visibleMarkers };
   }
 
-  function renderChart(result, rangeStart, rangeEnd) {
+  function formatGal(v) {
+    if (v === 0) return '0';
+    return (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + 'k';
+  }
+
+  function getXTicks(range, rangeStart, rangeEnd) {
+    const ticks = [];
+    if (range === 'day') {
+      for (let h = 0; h <= 24; h += 6) {
+        const t = new Date(rangeStart.getTime() + h * 60 * 60 * 1000);
+        ticks.push({ time: t, label: t.toLocaleTimeString(undefined, { hour: 'numeric' }) });
+      }
+    } else if (range === 'week') {
+      for (let d = 0; d <= 7; d += 1) {
+        const t = new Date(rangeStart.getTime() + d * 24 * 60 * 60 * 1000);
+        ticks.push({ time: t, label: t.toLocaleDateString(undefined, { weekday: 'short' }) });
+      }
+    } else {
+      for (let d = 0; d <= 30; d += 6) {
+        const t = new Date(rangeStart.getTime() + d * 24 * 60 * 60 * 1000);
+        ticks.push({ time: t, label: t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) });
+      }
+    }
+    return ticks;
+  }
+
+  function renderChart(result, rangeStart, rangeEnd, range) {
     const svg = document.getElementById('chart-svg');
-    const W = 340, H = 220, PAD_L = 8, PAD_R = 8, PAD_T = 10, PAD_B = 10;
+    const W = 340, H = 220, PAD_L = 34, PAD_R = 8, PAD_T = 10, PAD_B = 22;
     const xSpan = rangeEnd - rangeStart;
     const x = (t) => PAD_L + ((t - rangeStart) / xSpan) * (W - PAD_L - PAD_R);
     const y = (g) => PAD_T + (1 - g / TANK_CAPACITY) * (H - PAD_T - PAD_B);
@@ -892,12 +918,20 @@
     const { series, markers } = result;
     const linePoints = series.map(p => `${x(p.time).toFixed(1)},${y(p.gallons).toFixed(1)}`).join(' ');
 
-    let svgContent = `
-      <line x1="${PAD_L}" y1="${y(0)}" x2="${W-PAD_R}" y2="${y(0)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
-      <line x1="${PAD_L}" y1="${y(3000)}" x2="${W-PAD_R}" y2="${y(3000)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
-      <line x1="${PAD_L}" y1="${y(6000)}" x2="${W-PAD_R}" y2="${y(6000)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
-      <polyline points="${linePoints}" fill="none" stroke="#2F8FE0" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-    `;
+    const yTickVals = [0, 1500, 3000, 4500, 6000];
+    let svgContent = '';
+    for (const gv of yTickVals) {
+      svgContent += `<line x1="${PAD_L}" y1="${y(gv)}" x2="${W-PAD_R}" y2="${y(gv)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>`;
+      svgContent += `<text x="${PAD_L - 6}" y="${y(gv) + 3}" text-anchor="end" font-size="9" fill="#8CA0BE">${formatGal(gv)}</text>`;
+    }
+
+    const xTicks = getXTicks(range, rangeStart, rangeEnd);
+    for (const tick of xTicks) {
+      const tx = x(tick.time);
+      svgContent += `<text x="${tx}" y="${H - 6}" text-anchor="middle" font-size="9" fill="#8CA0BE">${tick.label}</text>`;
+    }
+
+    svgContent += `<polyline points="${linePoints}" fill="none" stroke="#2F8FE0" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
     for (const m of markers) {
       svgContent += `<circle cx="${x(m.time).toFixed(1)}" cy="${y(m.gallons).toFixed(1)}" r="3.5" fill="#E8B23C" stroke="#04162E" stroke-width="1"/>`;
     }
@@ -947,7 +981,7 @@
 
     statusEl.style.display = 'none';
     wrapEl.style.display = 'block';
-    renderChart(result, rangeStart, rangeEnd);
+    renderChart(result, rangeStart, rangeEnd, range);
   }
 
   // ==================== INIT ====================
