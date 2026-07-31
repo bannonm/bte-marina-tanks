@@ -177,6 +177,30 @@
 
   .screen{display:none;}
   .screen.active{display:block;}
+
+  .range-toggle{
+    display:flex; gap:6px; background:var(--navy-deep);
+    border-radius:12px; padding:4px; margin-bottom:16px;
+  }
+  .range-btn{
+    flex:1; background:none; border:none; color:var(--text-dim);
+    padding:9px 0; border-radius:9px; font-weight:700; font-size:13px;
+    cursor:pointer;
+  }
+  .range-btn.active{background:var(--water); color:#04162E;}
+
+  .chart-wrap{position:relative;}
+  #chart-svg{width:100%; height:220px; display:block; touch-action:pan-y;}
+  .chart-tooltip{
+    position:absolute; pointer-events:none; opacity:0;
+    background:#04162E; border:1px solid rgba(255,255,255,0.15);
+    border-radius:8px; padding:6px 10px; font-size:12px;
+    color:var(--foam); white-space:nowrap; transform:translate(-50%,-115%);
+    transition:opacity 0.1s;
+  }
+  .chart-tooltip.visible{opacity:1;}
+  .chart-tooltip .tt-gal{font-weight:700;}
+  .chart-tooltip .tt-when{color:var(--text-dim); font-size:11px;}
 </style>
 </head>
 <body>
@@ -292,6 +316,22 @@
       <div class="status-pill pending">Not yet connected</div>
     </div>
   </section>
+  <!-- ===================== HISTORY ===================== -->
+  <section id="screen-history" class="screen">
+    <h2 class="section-title">Reserve Over Time</h2>
+    <div class="card">
+      <div class="range-toggle">
+        <button class="range-btn active" data-range="day">Day</button>
+        <button class="range-btn" data-range="week">Week</button>
+        <button class="range-btn" data-range="month">Month</button>
+      </div>
+      <div id="chart-status" class="helper" style="text-align:center;">Loading...</div>
+      <div class="chart-wrap" id="chart-wrap" style="display:none;">
+        <svg id="chart-svg" viewBox="0 0 340 220" preserveAspectRatio="none"></svg>
+        <div id="chart-tooltip" class="chart-tooltip"></div>
+      </div>
+    </div>
+  </section>
 
 </main>
 
@@ -303,6 +343,10 @@
   <button class="tab-btn" data-screen="screen-calibrate">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v16m8-8H4"/></svg>
     Calibrate
+  </button>
+  <button class="tab-btn" data-screen="screen-history">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l5-5 4 4 8-9M14 7h6v6"/></svg>
+    History
   </button>
 </nav>
 
@@ -322,6 +366,9 @@
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(btn.dataset.screen).classList.add('active');
+      if (btn.dataset.screen === 'screen-history') {
+        loadHistory(currentRange);
+      }
     });
   });
 
@@ -732,7 +779,178 @@
     loadDashboard();
   }
 
-  // ---- Init ----
+  // ==================== HISTORY / CHART ====================
+  let currentRange = 'day';
+  const RANGE_MS = {
+    day: 24 * 60 * 60 * 1000,
+    week: 7 * 24 * 60 * 60 * 1000,
+    month: 30 * 24 * 60 * 60 * 1000,
+  };
+
+  document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentRange = btn.dataset.range;
+      loadHistory(currentRange);
+    });
+  });
+
+  // Reconstructs a continuous reserve-over-time series from calibration
+  // anchors (hard resets) plus flow_readings (incremental deltas),
+  // exactly matching the same logic the live dashboard gauge uses —
+  // just replayed point-by-point instead of collapsed to one number.
+  async function buildTimeSeries(rangeStart) {
+    const { data: cals, error: calErr } = await sb
+      .from('calibration_events')
+      .select('gallons,measured_at,source')
+      .order('measured_at', { ascending: true });
+    if (calErr || !cals || cals.length === 0) return null;
+
+    // Find the last calibration at or before rangeStart to use as the
+    // starting anchor; if none exists, fall back to the earliest
+    // calibration on record (chart will start there instead).
+    let baseAnchor = null;
+    for (const c of cals) {
+      if (new Date(c.measured_at) <= rangeStart) baseAnchor = c;
+    }
+    if (!baseAnchor) baseAnchor = cals[0];
+
+    const { data: flows, error: flowErr } = await sb
+      .from('flow_readings')
+      .select('meter_label,total_flow_amount,window_end')
+      .gt('window_end', baseAnchor.measured_at)
+      .order('window_end', { ascending: true })
+      .limit(10000);
+    if (flowErr) return null;
+
+    // Group flow readings by identical window_end (3 meters share a
+    // timestamp per poll cycle) into single net-delta events.
+    const flowByTime = new Map();
+    for (const row of (flows || [])) {
+      const t = safeParseDate(row.window_end);
+      if (!t) continue;
+      const key = t.getTime();
+      const amt = Number(row.total_flow_amount) || 0;
+      const signed = row.meter_label === 'outflow' ? -amt : amt;
+      flowByTime.set(key, (flowByTime.get(key) || 0) + signed);
+    }
+
+    // Build a single chronological event list: calibration snaps
+    // (override) and flow deltas (incremental), replayed in time order.
+    const events = [];
+    for (const c of cals) {
+      const t = new Date(c.measured_at);
+      if (t > new Date(baseAnchor.measured_at)) {
+        events.push({ time: t, type: 'cal', gallons: c.gallons, source: c.source });
+      }
+    }
+    for (const [ms, delta] of flowByTime.entries()) {
+      events.push({ time: new Date(ms), type: 'flow', delta });
+    }
+    events.sort((a, b) => a.time - b.time);
+
+    let level = baseAnchor.gallons;
+    const series = [{ time: new Date(baseAnchor.measured_at), gallons: level }];
+    const calMarkers = [];
+
+    for (const ev of events) {
+      if (ev.type === 'cal') {
+        level = ev.gallons;
+        calMarkers.push({ time: ev.time, gallons: level, source: ev.source });
+      } else {
+        level = Math.max(0, Math.min(TANK_CAPACITY, level + ev.delta));
+      }
+      series.push({ time: ev.time, gallons: level });
+    }
+
+    // Trim to the visible window, but keep the interpolated level at
+    // rangeStart itself so the line doesn't start mid-air.
+    const levelAtRangeStart = (() => {
+      let l = baseAnchor.gallons;
+      for (const ev of events) {
+        if (ev.time > rangeStart) break;
+        l = ev.type === 'cal' ? ev.gallons : Math.max(0, Math.min(TANK_CAPACITY, l + ev.delta));
+      }
+      return l;
+    })();
+
+    const trimmed = series.filter(p => p.time >= rangeStart);
+    trimmed.unshift({ time: rangeStart, gallons: levelAtRangeStart });
+    const visibleMarkers = calMarkers.filter(m => m.time >= rangeStart);
+
+    return { series: trimmed, markers: visibleMarkers };
+  }
+
+  function renderChart(result, rangeStart, rangeEnd) {
+    const svg = document.getElementById('chart-svg');
+    const W = 340, H = 220, PAD_L = 8, PAD_R = 8, PAD_T = 10, PAD_B = 10;
+    const xSpan = rangeEnd - rangeStart;
+    const x = (t) => PAD_L + ((t - rangeStart) / xSpan) * (W - PAD_L - PAD_R);
+    const y = (g) => PAD_T + (1 - g / TANK_CAPACITY) * (H - PAD_T - PAD_B);
+
+    const { series, markers } = result;
+    const linePoints = series.map(p => `${x(p.time).toFixed(1)},${y(p.gallons).toFixed(1)}`).join(' ');
+
+    let svgContent = `
+      <line x1="${PAD_L}" y1="${y(0)}" x2="${W-PAD_R}" y2="${y(0)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <line x1="${PAD_L}" y1="${y(3000)}" x2="${W-PAD_R}" y2="${y(3000)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <line x1="${PAD_L}" y1="${y(6000)}" x2="${W-PAD_R}" y2="${y(6000)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <polyline points="${linePoints}" fill="none" stroke="#2F8FE0" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    `;
+    for (const m of markers) {
+      svgContent += `<circle cx="${x(m.time).toFixed(1)}" cy="${y(m.gallons).toFixed(1)}" r="3.5" fill="#E8B23C" stroke="#04162E" stroke-width="1"/>`;
+    }
+    svg.innerHTML = svgContent;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    // Tap/drag interaction: find nearest point to pointer x, show tooltip.
+    const tooltip = document.getElementById('chart-tooltip');
+    function showTooltipAt(clientX) {
+      const rect = svg.getBoundingClientRect();
+      const relX = ((clientX - rect.left) / rect.width) * W;
+      let nearest = series[0], minDist = Infinity;
+      for (const p of series) {
+        const d = Math.abs(x(p.time) - relX);
+        if (d < minDist) { minDist = d; nearest = p; }
+      }
+      const px = (x(nearest.time) / W) * rect.width;
+      const py = (y(nearest.gallons) / H) * rect.height;
+      tooltip.style.left = px + 'px';
+      tooltip.style.top = py + 'px';
+      tooltip.innerHTML = `<div class="tt-gal">${Math.round(nearest.gallons).toLocaleString()} gal</div><div class="tt-when">${nearest.time.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>`;
+      tooltip.classList.add('visible');
+    }
+    function hideTooltip() { tooltip.classList.remove('visible'); }
+
+    svg.onpointerdown = (e) => { showTooltipAt(e.clientX); };
+    svg.onpointermove = (e) => { if (e.buttons > 0 || e.pointerType === 'touch') showTooltipAt(e.clientX); };
+    svg.onpointerup = () => setTimeout(hideTooltip, 1500);
+    svg.onpointerleave = hideTooltip;
+  }
+
+  async function loadHistory(range) {
+    const statusEl = document.getElementById('chart-status');
+    const wrapEl = document.getElementById('chart-wrap');
+    statusEl.style.display = 'block';
+    wrapEl.style.display = 'none';
+    statusEl.textContent = 'Loading...';
+
+    const rangeEnd = new Date();
+    const rangeStart = new Date(rangeEnd.getTime() - RANGE_MS[range]);
+
+    const result = await buildTimeSeries(rangeStart);
+    if (!result || result.series.length < 2) {
+      statusEl.textContent = 'Not enough data yet for this range.';
+      return;
+    }
+
+    statusEl.style.display = 'none';
+    wrapEl.style.display = 'block';
+    renderChart(result, rangeStart, rangeEnd);
+  }
+
+  // ==================== INIT ====================
   loadDashboard();
   loadPendingDualZero();
   setInterval(() => {
